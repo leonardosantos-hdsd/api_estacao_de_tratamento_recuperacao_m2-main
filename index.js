@@ -1,179 +1,125 @@
+// index.js
 const express = require("express");
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
+const path = require("path");
 
 const app = express();
-const PORT = 3000;
 
-// // CORS precisa vir antes das rotas
-// app.use(
-//   cors({
-//     origin: ["http://localhost:5173"], // Vite
-//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-//     allowedHeaders: ["Content-Type", "Authorization", "x-access-token"],
-//   })
-// );
-// // (opcional, mas útil) trata preflight explicitamente
-// app.options("*", cors());
+// ====== ENV ======
+const PORT = process.env.PORT || 3000;
+const CORS_ORIGIN = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const FILE_PATH = process.env.FILE_PATH || path.resolve("./estacoes.json");
+const EXPECTED_EMAIL = process.env.LOGIN_EMAIL || "lab365@gmail.com";
+const EXPECTED_SENHA = process.env.LOGIN_SENHA || "lab365123";
+const FIXED_TOKEN = process.env.API_TOKEN || "lab365-token-2025";
 
-// app.use(express.json());
+// ====== CORS ======
+const corsOptions = {
+  origin: (origin, cb) => {
+    if (!origin || CORS_ORIGIN.length === 0 || CORS_ORIGIN.includes(origin)) {
+      return cb(null, true);
+    }
+    return cb(new Error("Not allowed by CORS"), false);
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
-const FILE_PATH = "./estacoes.json";
-const EXPECTED_EMAIL = "lab365@gmail.com";
-const EXPECTED_SENHA = "lab365123";
-// token fixo que será retornado no login e exigido nas demais rotas
-const FIXED_TOKEN = "lab365-token-2025";
-
+// ====== BODY PARSER ======
 app.use(express.json());
 
-// middleware de autenticação para proteger rotas /estacoes
-function authMiddleware(req, res, next) {
-  // aceita: Authorization: Bearer <token> ou x-access-token: <token>
-  const authHeader = req.headers["authorization"];
-  const xToken = req.headers["x-access-token"];
-  let token = null;
-
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.slice(7);
-  } else if (authHeader) {
-    token = authHeader;
-  } else if (xToken) {
-    token = xToken;
-  }
-
-  if (!token || token !== FIXED_TOKEN) {
-    return res
-      .status(401)
-      .json({ message: "Não autorizado. Token inválido ou ausente." });
-  }
-
-  next();
-}
-
-// Função auxiliar para ler o arquivo JSON
-function readData() {
+// ====== FS helpers ======
+function ensureFile() {
   if (!fs.existsSync(FILE_PATH)) {
-    fs.writeFileSync(FILE_PATH, JSON.stringify([]));
+    fs.writeFileSync(FILE_PATH, "[]", "utf-8");
   }
-  const data = fs.readFileSync(FILE_PATH);
-  return JSON.parse(data);
 }
-
-// Função auxiliar para salvar no arquivo JSON
+function readData() {
+  ensureFile();
+  const raw = fs.readFileSync(FILE_PATH, "utf-8");
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
 function writeData(data) {
-  fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2));
+  fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
-// Rota: Login (pública)
+// ====== HEALTH ======
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ====== LOGIN ======
 app.post("/login", (req, res) => {
-  const { email, senha } = req.body;
-
+  const { email, senha } = req.body || {};
   if (email === EXPECTED_EMAIL && senha === EXPECTED_SENHA) {
-    return res.json({
-      message: "Login realizado com sucesso!",
-      token: FIXED_TOKEN,
-    });
+    return res.json({ token: FIXED_TOKEN });
   }
-
-  return res.status(401).json({ message: "Credenciais inválidas" });
+  return res.status(401).json({ error: "Credenciais inválidas" });
 });
 
-// aplicar middleware a todas as rotas que começam com /estacoes
-app.use("/estacoes", authMiddleware);
+// ====== AUTH MIDDLEWARE ======
+function authMiddleware(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const [, token] = auth.split(" ");
+  if (token === FIXED_TOKEN) return next();
+  return res.status(401).json({ error: "Token inválido" });
+}
 
-// Rota: Listar todas as estações
-app.get("/estacoes", (req, res) => {
-  const estacoes = readData();
-  res.json(estacoes);
+// ====== CRUD ESTAÇÕES (PROTEGIDO) ======
+app.get("/estacoes", authMiddleware, (req, res) => {
+  const data = readData();
+  res.json(data);
 });
 
-// Rota: Buscar uma estação pelo ID (findOne)
-app.get("/estacoes/:id", (req, res) => {
-  const { id } = req.params;
+app.post("/estacoes", authMiddleware, (req, res) => {
   const estacoes = readData();
-  const estacao = estacoes.find((e) => e.id === id);
-
-  if (!estacao) {
-    return res.status(404).json({ message: "Estação não encontrada" });
-  }
-
-  res.json(estacao);
-});
-
-// Rota: Cadastrar nova estação
-app.post("/estacoes", (req, res) => {
-  const {
-    nome,
-    descricao,
-    urlImagem,
-    cep,
-    logradouro,
-    estado,
-    cidade,
-    bairro,
-    numero,
-    complemento,
-    capacidadeToneladas,
-    tipoTratamento,
-    dataInicioOperacao,
-  } = req.body;
-
-  const estacoes = readData();
-
-  const novaEstacao = {
+  const { nome, descricao, cep } = req.body || {};
+  const nova = {
     id: uuidv4(),
-    nome,
-    descricao,
-    urlImagem,
-    cep,
-    logradouro,
-    estado,
-    cidade,
-    bairro,
-    numero,
-    complemento,
-    capacidadeToneladas,
-    tipoTratamento,
-    dataInicioOperacao,
+    nome: nome || "Sem nome",
+    descricao: descricao || "",
+    cep: cep || "",
+    criadoEm: new Date().toISOString(),
   };
-
-  estacoes.push(novaEstacao);
+  estacoes.push(nova);
   writeData(estacoes);
-
-  res.status(201).json(novaEstacao);
+  res.status(201).json(nova);
 });
 
-// Rota: Editar estação
-app.put("/estacoes/:id", (req, res) => {
-  const { id } = req.params;
+app.put("/estacoes/:id", authMiddleware, (req, res) => {
   const estacoes = readData();
-  const index = estacoes.findIndex((e) => e.id === id);
-
-  if (index === -1) {
-    return res.status(404).json({ message: "Estação não encontrada" });
-  }
-
-  estacoes[index] = { ...estacoes[index], ...req.body };
+  const idx = estacoes.findIndex((e) => e.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: "Não encontrado" });
+  estacoes[idx] = { ...estacoes[idx], ...req.body, id: estacoes[idx].id };
   writeData(estacoes);
-
-  res.json(estacoes[index]);
+  res.json(estacoes[idx]);
 });
 
-// Rota: Deletar estação
-app.delete("/estacoes/:id", (req, res) => {
-  const { id } = req.params;
-  let estacoes = readData();
-  const novaLista = estacoes.filter((e) => e.id !== id);
-
-  if (estacoes.length === novaLista.length) {
-    return res.status(404).json({ message: "Estação não encontrada" });
-  }
-
-  writeData(novaLista);
-  res.json({ message: "Estação deletada com sucesso" });
+app.delete("/estacoes/:id", authMiddleware, (req, res) => {
+  const estacoes = readData();
+  const idx = estacoes.findIndex((e) => e.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: "Não encontrado" });
+  const [removida] = estacoes.splice(idx, 1);
+  writeData(estacoes);
+  res.json(removida);
 });
 
-app.listen(PORT, () => {
+// ====== START ======
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 });
