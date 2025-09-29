@@ -1,0 +1,18 @@
+[
+  {
+    "id": "adb61a2b-d7de-469c-b5ce-f43f7fb7a30f",
+    "nome": "ETA Rio Verde",
+    "descricao": "Estação de tratamento de água responsável pelo abastecimento da região central.",
+    "urlImagem": "https://exemplo.com/imagens/eta-rio-verde.jpg",
+    "cep": "89010000",
+    "logradouro": "Avenida Central",
+    "estado": "SC",
+    "cidade": "Blumenau",
+    "bairro": "Centro",
+    "numero": "1200",
+    "complemento": "Próximo ao parque",
+    "capacidadeToneladas": 500,
+    "tipoTratamento": "Água potável",
+    "dataInicioOperacao": "2015-06-20"
+  }
+]
